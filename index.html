@@ -1,99 +1,492 @@
-# 📞 Call Center Budget & Forecast Tool
+"""
+Call Center Budget & Forecast Tool
+Regenerates CC_Budget_Template.xlsx with customizable settings.
 
-A professional Excel budget template for call centers — with a Python script to regenerate or customize it.
+Usage:
+    pip install openpyxl
+    python generate_budget.py
+"""
 
-## 📁 Files
-| File | Purpose |
-|------|---------|
-| `CC_Budget_Template.xlsx` | Ready-to-use Excel template — open and fill in blue cells |
-| `generate_budget.py` | Python script to regenerate the template (useful if you want to customize) |
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
----
+# ──────────────────────────────────────────────
+# TOP-LEVEL CUSTOMIZATION — edit these values
+# ──────────────────────────────────────────────
 
-## 🚀 Quick Start (no coding needed)
-1. Download `CC_Budget_Template.xlsx`
-2. Open in Excel or Google Sheets
-3. Start on the **📖 Instructions** tab
-4. Fill in only the **blue cells** — everything else calculates automatically
-
----
-
-## 📊 Sheets Overview
-
-| Sheet | What to do |
-|-------|-----------|
-| **📖 Instructions** | Read first |
-| **Assumptions** | Enter unit rates, shrinkage %, salaries, meal cards, CTC multipliers |
-| **Headcount Plan** | Enter FTE count per role per month |
-| **Salary & Cost** | Auto-calculated salary + CTC cost |
-| **Revenue Forecast** | Auto-calculated billable revenue |
-| **P&L Summary** | Full P&L with margin — add overhead costs here |
-
----
-
-## 🔧 Customizing with Python (optional)
-
-### Install requirements (once)
-```bash
-pip install openpyxl
-```
-
-### Run
-```bash
-python generate_budget.py
-```
-
-This regenerates `CC_Budget_Template.xlsx` with your changes.
-
-### Common customizations (edit at top of `generate_budget.py`)
-
-**Add a new language/LOB:**
-```python
 UNIT_RATE_ROWS = [
-    ...
-    ("Spanish – Voice Inbound", "Per Hour"),   # ← add here
+    ("Spanish – Voice Inbound",  "Per Hour", 7.5),
+    ("English – Voice Inbound",  "Per Hour", 8.0),
+    ("Chat – Inbound",           "Per Hour", 6.5),
+    # ← add more language/LOB rows here
 ]
-```
 
-**Add a new agent type:**
-```python
 BILLABLE_AGENTS = [
-    ...
-    ("Agent – Junior", "Spanish – Voice Inbound", 7.5),  # ← add here
+    ("Agent – Junior",   "Spanish – Voice Inbound", 7.5),
+    ("Agent – Senior",   "English – Voice Inbound", 9.0),
+    # ← add more agent types here
 ]
-```
 
-**Add an overhead role:**
-```python
 OVERHEAD_ROLES = [
-    ...
-    "Compliance Officer",   # ← add here
+    ("Team Leader",       0.10),   # fraction of billable headcount
+    ("QA Analyst",        0.05),
+    ("WFM Specialist",    0.03),
+    ("Compliance Officer", 0.02),
+    # ← add more overhead roles here
 ]
-```
 
-**Change shrinkage defaults:**
-```python
 SHRINKAGE = [
-    ("Annual Leave / Vacation", 0.10),   # ← change the percentage
-    ...
+    ("Annual Leave / Vacation", 0.10),
+    ("Sick Leave",               0.05),
+    ("Training",                 0.03),
+    ("Other Absence",            0.02),
+    # ← change percentages here
 ]
-```
 
----
+CTC_MULTIPLIER   = 1.20   # employer social costs on top of gross salary
+MEAL_CARD_DAILY  = 8.00   # meal card value per working day (currency units)
+WORKING_DAYS_PM  = 22     # average working days per month
 
-## 📐 Color Coding
-| Color | Meaning |
-|-------|---------|
-| 🔵 Blue text | **Input cell** — fill this in |
-| ⚫ Black text | Auto-calculated formula — do not edit |
-| 🟢 Green text | Linked from another sheet — do not edit |
-| 🟡 Gold background | Key assumption needing regular review |
+MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
----
+OUTPUT_FILE = "CC_Budget_Template.xlsx"
 
-## 💡 Tips
-- **Shrinkage** is fully adjustable — edit each component separately in the Assumptions sheet
-- **Overhead roles** (Team Leaders, QA, WFM, etc.) are tracked separately from billable agents
-- **CTC multiplier** automatically adds employer social costs on top of gross salary
-- **Meal card** is calculated as daily rate × working days per month
-- To forecast: change headcount numbers in future months — revenue and costs update instantly
+# ──────────────────────────────────────────────
+# STYLE HELPERS
+# ──────────────────────────────────────────────
+
+BLUE   = "0000FF"
+BLACK  = "000000"
+GREEN  = "008000"
+YELLOW = "FFFF00"
+HEADER_BG = "1F4E79"
+HEADER_FG = "FFFFFF"
+ALT_BG    = "D9E1F2"
+
+thin = Side(style="thin", color="AAAAAA")
+BORDER = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+def hdr(ws, row, col, value, bg=HEADER_BG, fg=HEADER_FG, bold=True, wrap=True):
+    c = ws.cell(row=row, column=col, value=value)
+    c.font = Font(name="Arial", bold=bold, color=fg, size=10)
+    c.fill = PatternFill("solid", start_color=bg)
+    c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=wrap)
+    c.border = BORDER
+    return c
+
+def inp(ws, row, col, value, color=BLUE, bg=None):
+    c = ws.cell(row=row, column=col, value=value)
+    c.font = Font(name="Arial", color=color, size=10)
+    if bg:
+        c.fill = PatternFill("solid", start_color=bg)
+    c.border = BORDER
+    return c
+
+def formula(ws, row, col, expr, color=BLACK):
+    c = ws.cell(row=row, column=col, value=expr)
+    c.font = Font(name="Arial", color=color, size=10)
+    c.border = BORDER
+    return c
+
+def pct_fmt(c):
+    c.number_format = "0.0%"
+    return c
+
+def usd_fmt(c):
+    c.number_format = '$#,##0.00;($#,##0.00);"-"'
+    return c
+
+def num_fmt(c):
+    c.number_format = '#,##0;(#,##0);"-"'
+    return c
+
+# ──────────────────────────────────────────────
+# SHEET 1 – Instructions
+# ──────────────────────────────────────────────
+
+def build_instructions(wb):
+    ws = wb.create_sheet("📋 Instructions")
+    ws.column_dimensions["A"].width = 90
+    lines = [
+        ("CALL CENTER BUDGET & FORECAST TOOL", True, "1F4E79", 14),
+        ("", False, BLACK, 10),
+        ("HOW TO USE THIS TEMPLATE", True, "2E75B6", 11),
+        ("1. Go to the 📊 Assumptions sheet and fill in the BLUE cells with your unit rates, shrinkage, salaries, meal cards, and CTC multipliers.", False, BLACK, 10),
+        ("2. Go to the 👥 Headcount Plan sheet and enter FTE counts per role per month (blue cells).", False, BLACK, 10),
+        ("3. All other sheets (Salary & Cost, Revenue Forecast, P&L Summary) calculate automatically.", False, BLACK, 10),
+        ("4. Do NOT edit GREEN cells — they are linked from other sheets.", False, BLACK, 10),
+        ("", False, BLACK, 10),
+        ("COLOR CODING", True, "2E75B6", 11),
+        ("🔵  Blue text   → Input cells — fill these in", False, BLUE, 10),
+        ("⚫  Black text  → Auto-calculated formulas — do not edit", False, BLACK, 10),
+        ("🟢  Green text  → Linked from another sheet — do not edit", False, GREEN, 10),
+        ("🟡  Yellow bg   → Key assumption needing regular review", False, BLACK, 10),
+        ("", False, BLACK, 10),
+        ("TIPS", True, "2E75B6", 11),
+        ("• Shrinkage is fully adjustable — edit each component in the Assumptions sheet.", False, BLACK, 10),
+        ("• Overhead roles (Team Leaders, QA, WFM, etc.) are tracked separately from billable agents.", False, BLACK, 10),
+        ("• CTC multiplier automatically adds employer social costs on top of gross salary.", False, BLACK, 10),
+        ("• Meal card is calculated as: daily rate × working days per month.", False, BLACK, 10),
+        ("• To forecast: change headcount numbers in future months — revenue and costs update instantly.", False, BLACK, 10),
+    ]
+    for r, (text, bold, color, size) in enumerate(lines, start=1):
+        c = ws.cell(row=r, column=1, value=text)
+        c.font = Font(name="Arial", bold=bold, color=color, size=size)
+        if bold and text:
+            c.fill = PatternFill("solid", start_color="EBF3FB")
+        c.alignment = Alignment(wrap_text=True, vertical="top")
+        ws.row_dimensions[r].height = 20 if not text else 18
+
+# ──────────────────────────────────────────────
+# SHEET 2 – Assumptions
+# ──────────────────────────────────────────────
+
+def build_assumptions(wb):
+    ws = wb.create_sheet("📊 Assumptions")
+    ws.column_dimensions["A"].width = 30
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 18
+
+    r = 1
+    hdr(ws, r, 1, "ASSUMPTIONS", bg=HEADER_BG); ws.merge_cells(f"A{r}:C{r}"); r += 2
+
+    # Unit Rates
+    hdr(ws, r, 1, "Unit Rates (Billable)"); hdr(ws, r, 2, "Billing Unit"); hdr(ws, r, 3, "Rate ($)"); r += 1
+    for name, unit, rate in UNIT_RATE_ROWS:
+        inp(ws, r, 1, name, BLACK)
+        inp(ws, r, 2, unit, BLACK)
+        c = inp(ws, r, 3, rate, BLUE, YELLOW)
+        usd_fmt(c)
+        r += 1
+    r += 1
+
+    # Shrinkage
+    hdr(ws, r, 1, "Shrinkage Components"); hdr(ws, r, 2, "% of Available Hours"); r += 1
+    shrink_start = r
+    for name, pct in SHRINKAGE:
+        inp(ws, r, 1, name, BLACK)
+        c = inp(ws, r, 2, pct, BLUE, YELLOW)
+        pct_fmt(c)
+        r += 1
+    shrink_end = r - 1
+    inp(ws, r, 1, "Total Shrinkage", BLACK).font = Font(bold=True, name="Arial")
+    c = formula(ws, r, 2, f"=SUM(B{shrink_start}:B{shrink_end})")
+    pct_fmt(c)
+    r += 2
+
+    # CTC & Meal Card
+    hdr(ws, r, 1, "Payroll Settings"); hdr(ws, r, 2, "Value"); r += 1
+    inp(ws, r, 1, "CTC Multiplier", BLACK)
+    c = inp(ws, r, 2, CTC_MULTIPLIER, BLUE, YELLOW); c.number_format = "0.00x"; r += 1
+    inp(ws, r, 1, "Meal Card ($/day)", BLACK)
+    c = inp(ws, r, 2, MEAL_CARD_DAILY, BLUE, YELLOW); usd_fmt(c); r += 1
+    inp(ws, r, 1, "Working Days / Month", BLACK)
+    inp(ws, r, 2, WORKING_DAYS_PM, BLUE, YELLOW); r += 2
+
+    # Agent salaries
+    hdr(ws, r, 1, "Agent Type"); hdr(ws, r, 2, "LOB"); hdr(ws, r, 3, "Hourly Gross ($)"); r += 1
+    for atype, lob, rate in BILLABLE_AGENTS:
+        inp(ws, r, 1, atype, BLACK)
+        inp(ws, r, 2, lob, BLACK)
+        c = inp(ws, r, 3, rate, BLUE, YELLOW); usd_fmt(c); r += 1
+    r += 1
+
+    # Overhead roles
+    hdr(ws, r, 1, "Overhead Role"); hdr(ws, r, 2, "Ratio to Billable HC"); r += 1
+    for role, ratio in OVERHEAD_ROLES:
+        inp(ws, r, 1, role, BLACK)
+        c = inp(ws, r, 2, ratio, BLUE, YELLOW); pct_fmt(c); r += 1
+
+# ──────────────────────────────────────────────
+# SHEET 3 – Headcount Plan
+# ──────────────────────────────────────────────
+
+def build_headcount(wb):
+    ws = wb.create_sheet("👥 Headcount Plan")
+    ws.column_dimensions["A"].width = 28
+    for i, m in enumerate(MONTHS, start=2):
+        ws.column_dimensions[get_column_letter(i)].width = 10
+
+    r = 1
+    hdr(ws, r, 1, "HEADCOUNT PLAN (FTE)", bg=HEADER_BG)
+    ws.merge_cells(f"A{r}:{get_column_letter(len(MONTHS)+1)}{r}")
+    r += 1
+
+    # Month headers
+    hdr(ws, r, 1, "Role / Agent Type")
+    for i, m in enumerate(MONTHS, start=2):
+        hdr(ws, r, i, m)
+    r += 1
+
+    # Billable agents
+    hdr(ws, r, 1, "Billable Agents", bg="2E75B6")
+    ws.merge_cells(f"A{r}:{get_column_letter(len(MONTHS)+1)}{r}")
+    r += 1
+
+    agent_rows = {}
+    for atype, lob, _ in BILLABLE_AGENTS:
+        label = f"{atype} ({lob})"
+        agent_rows[label] = r
+        inp(ws, r, 1, label, BLACK)
+        for col in range(2, len(MONTHS) + 2):
+            c = inp(ws, r, col, 0, BLUE)
+            num_fmt(c)
+        r += 1
+
+    # Total billable row
+    total_bill_row = r
+    inp(ws, r, 1, "Total Billable", BLACK).font = Font(bold=True, name="Arial")
+    for col in range(2, len(MONTHS) + 2):
+        start_r = r - len(BILLABLE_AGENTS)
+        c = formula(ws, r, col, f"=SUM({get_column_letter(col)}{start_r}:{get_column_letter(col)}{r-1})")
+        num_fmt(c)
+    r += 2
+
+    # Overhead
+    hdr(ws, r, 1, "Overhead Roles (auto-calculated)", bg="2E75B6")
+    ws.merge_cells(f"A{r}:{get_column_letter(len(MONTHS)+1)}{r}")
+    r += 1
+
+    # We reference Assumptions sheet col B for ratios
+    # Overhead roles start at row 9+len(UNIT_RATE_ROWS)+len(SHRINKAGE)+6+len(BILLABLE_AGENTS)+2 in Assumptions
+    # Simpler: just hardcode the ratios inline from OVERHEAD_ROLES
+    for idx, (role, ratio) in enumerate(OVERHEAD_ROLES):
+        inp(ws, r, 1, role, BLACK)
+        for col in range(2, len(MONTHS) + 2):
+            c = formula(ws, r, col,
+                f"=ROUND({get_column_letter(col)}{total_bill_row}*{ratio},0)")
+            num_fmt(c)
+        r += 1
+
+    # Grand total
+    r += 1
+    inp(ws, r, 1, "TOTAL HEADCOUNT", BLACK).font = Font(bold=True, name="Arial", size=11)
+    for col in range(2, len(MONTHS) + 2):
+        start_r = 3
+        c = formula(ws, r, col,
+            f"=SUM({get_column_letter(col)}{start_r}:{get_column_letter(col)}{r-1})")
+        num_fmt(c)
+        c.font = Font(bold=True, name="Arial")
+
+# ──────────────────────────────────────────────
+# SHEET 4 – Salary & Cost
+# ──────────────────────────────────────────────
+
+def build_salary(wb):
+    ws = wb.create_sheet("💰 Salary & Cost")
+    ws.column_dimensions["A"].width = 32
+    for i in range(2, len(MONTHS) + 3):
+        ws.column_dimensions[get_column_letter(i)].width = 13
+
+    r = 1
+    hdr(ws, r, 1, "SALARY & COST SUMMARY", bg=HEADER_BG)
+    ws.merge_cells(f"A{r}:{get_column_letter(len(MONTHS)+1)}{r}")
+    r += 1
+
+    hdr(ws, r, 1, "Cost Item")
+    for i, m in enumerate(MONTHS, start=2):
+        hdr(ws, r, i, m)
+    hdr(ws, r, len(MONTHS) + 2, "Full Year")
+    r += 1
+
+    cost_rows = []
+
+    def cost_row(label, values_expr):
+        nonlocal r
+        inp(ws, r, 1, label, BLACK)
+        for col, expr in enumerate(values_expr, start=2):
+            c = formula(ws, r, col, expr, GREEN)
+            usd_fmt(c)
+        # Full year
+        col_fy = len(MONTHS) + 2
+        c = formula(ws, r, col_fy,
+            f"=SUM({get_column_letter(2)}{r}:{get_column_letter(len(MONTHS)+1)}{r})")
+        usd_fmt(c)
+        c.font = Font(bold=True, name="Arial", color=BLACK)
+        cost_rows.append(r)
+        r += 1
+
+    # Gross salary — sum of (agent HC × hourly rate × worked hours/month)
+    # Worked hours per month = WORKING_DAYS_PM × 8 × (1 - total shrinkage)
+    # We pull HC from Headcount sheet rows 4..4+len(BILLABLE_AGENTS)-1
+    # and rates from Assumptions
+    for idx, (atype, lob, rate) in enumerate(BILLABLE_AGENTS):
+        hc_row = 4 + idx   # Headcount Plan row for this agent type
+        exprs = []
+        for col in range(2, len(MONTHS) + 2):
+            m_col = get_column_letter(col)
+            exprs.append(
+                f"='👥 Headcount Plan'!{m_col}{hc_row}"
+                f"*{rate}"
+                f"*{WORKING_DAYS_PM}*8"
+                f"*(1-📊 Assumptions!B{len(UNIT_RATE_ROWS)+3+len(SHRINKAGE)+1})"
+            )
+        cost_row(f"Gross Salary – {atype}", exprs)
+
+    gross_start = cost_rows[0]
+    gross_end   = cost_rows[-1]
+
+    # Total gross
+    inp(ws, r, 1, "Total Gross Salary", BLACK).font = Font(bold=True, name="Arial")
+    for col in range(2, len(MONTHS) + 3):
+        c = formula(ws, r, col,
+            f"=SUM({get_column_letter(col)}{gross_start}:{get_column_letter(col)}{gross_end})")
+        usd_fmt(c); c.font = Font(bold=True, name="Arial")
+    total_gross_row = r
+    r += 1
+
+    # CTC (social costs)
+    ctc_row_num = r
+    inp(ws, r, 1, "Employer Social Costs (CTC)", BLACK)
+    for col in range(2, len(MONTHS) + 3):
+        c = formula(ws, r, col,
+            f"={get_column_letter(col)}{total_gross_row}"
+            f"*(📊 Assumptions!B{len(UNIT_RATE_ROWS)+len(SHRINKAGE)+5}-1)")
+        usd_fmt(c); c.font = Font(name="Arial", color=BLACK)
+    cost_rows.append(r); r += 1
+
+    # Meal card
+    meal_row_num = r
+    inp(ws, r, 1, "Meal Card", BLACK)
+    # Total HC × daily rate × working days
+    total_hc_row = 4 + len(BILLABLE_AGENTS) + 1 + len(OVERHEAD_ROLES) + 2
+    for col in range(2, len(MONTHS) + 3):
+        m_col = get_column_letter(col)
+        c = formula(ws, r, col,
+            f"='👥 Headcount Plan'!{m_col}{total_hc_row}"
+            f"*📊 Assumptions!B{len(UNIT_RATE_ROWS)+len(SHRINKAGE)+6}"
+            f"*📊 Assumptions!B{len(UNIT_RATE_ROWS)+len(SHRINKAGE)+7}")
+        usd_fmt(c); c.font = Font(name="Arial", color=BLACK)
+    cost_rows.append(r); r += 2
+
+    # Grand total cost
+    inp(ws, r, 1, "TOTAL COST", BLACK).font = Font(bold=True, name="Arial", size=11)
+    for col in range(2, len(MONTHS) + 3):
+        c = formula(ws, r, col,
+            f"=SUM({get_column_letter(col)}{gross_start}:{get_column_letter(col)}{r-1})")
+        usd_fmt(c); c.font = Font(bold=True, name="Arial", size=11)
+
+# ──────────────────────────────────────────────
+# SHEET 5 – Revenue Forecast
+# ──────────────────────────────────────────────
+
+def build_revenue(wb):
+    ws = wb.create_sheet("📈 Revenue Forecast")
+    ws.column_dimensions["A"].width = 32
+    for i in range(2, len(MONTHS) + 3):
+        ws.column_dimensions[get_column_letter(i)].width = 13
+
+    r = 1
+    hdr(ws, r, 1, "REVENUE FORECAST", bg=HEADER_BG)
+    ws.merge_cells(f"A{r}:{get_column_letter(len(MONTHS)+1)}{r}")
+    r += 1
+
+    hdr(ws, r, 1, "LOB / Billing Line")
+    for i, m in enumerate(MONTHS, start=2):
+        hdr(ws, r, i, m)
+    hdr(ws, r, len(MONTHS) + 2, "Full Year")
+    r += 1
+
+    rev_rows = []
+    for idx, (name, unit, rate) in enumerate(UNIT_RATE_ROWS):
+        hc_row = 4 + idx
+        inp(ws, r, 1, name, BLACK)
+        for col in range(2, len(MONTHS) + 2):
+            m_col = get_column_letter(col)
+            c = formula(ws, r, col,
+                f"='👥 Headcount Plan'!{m_col}{hc_row}"
+                f"*{rate}"
+                f"*{WORKING_DAYS_PM}*8"
+                f"*(1-📊 Assumptions!B{len(UNIT_RATE_ROWS)+3+len(SHRINKAGE)+1})")
+            usd_fmt(c); c.font = Font(name="Arial", color=GREEN)
+        c = formula(ws, r, len(MONTHS) + 2,
+            f"=SUM({get_column_letter(2)}{r}:{get_column_letter(len(MONTHS)+1)}{r})")
+        usd_fmt(c); c.font = Font(bold=True, name="Arial")
+        rev_rows.append(r); r += 1
+
+    r += 1
+    inp(ws, r, 1, "TOTAL REVENUE", BLACK).font = Font(bold=True, name="Arial", size=11)
+    for col in range(2, len(MONTHS) + 3):
+        c = formula(ws, r, col,
+            f"=SUM({get_column_letter(col)}{rev_rows[0]}:{get_column_letter(col)}{rev_rows[-1]})")
+        usd_fmt(c); c.font = Font(bold=True, name="Arial", size=11)
+
+# ──────────────────────────────────────────────
+# SHEET 6 – P&L Summary
+# ──────────────────────────────────────────────
+
+def build_pnl(wb):
+    ws = wb.create_sheet("📉 P&L Summary")
+    ws.column_dimensions["A"].width = 30
+    for i in range(2, len(MONTHS) + 3):
+        ws.column_dimensions[get_column_letter(i)].width = 13
+
+    r = 1
+    hdr(ws, r, 1, "P&L SUMMARY", bg=HEADER_BG)
+    ws.merge_cells(f"A{r}:{get_column_letter(len(MONTHS)+1)}{r}")
+    r += 1
+
+    hdr(ws, r, 1, "Line Item")
+    for i, m in enumerate(MONTHS, start=2):
+        hdr(ws, r, i, m)
+    hdr(ws, r, len(MONTHS) + 2, "Full Year")
+    r += 1
+
+    # Revenue — last row in Revenue sheet is total revenue
+    rev_total_row = 3 + len(UNIT_RATE_ROWS) + 1
+    inp(ws, r, 1, "Revenue", BLACK)
+    for col in range(2, len(MONTHS) + 3):
+        c = formula(ws, r, col,
+            f"='📈 Revenue Forecast'!{get_column_letter(col)}{rev_total_row}")
+        usd_fmt(c); c.font = Font(name="Arial", color=GREEN)
+    rev_row = r; r += 1
+
+    # Cost — last row in Salary sheet
+    cost_total_row = 3 + len(BILLABLE_AGENTS) + 1 + 2 + 2
+    inp(ws, r, 1, "Total Cost", BLACK)
+    for col in range(2, len(MONTHS) + 3):
+        c = formula(ws, r, col,
+            f"='💰 Salary & Cost'!{get_column_letter(col)}{cost_total_row}")
+        usd_fmt(c); c.font = Font(name="Arial", color=GREEN)
+    cost_row = r; r += 2
+
+    # Gross Margin $
+    inp(ws, r, 1, "Gross Margin ($)", BLACK)
+    for col in range(2, len(MONTHS) + 3):
+        c = formula(ws, r, col,
+            f"={get_column_letter(col)}{rev_row}-{get_column_letter(col)}{cost_row}")
+        usd_fmt(c)
+    gm_row = r; r += 1
+
+    # Gross Margin %
+    inp(ws, r, 1, "Gross Margin (%)", BLACK)
+    for col in range(2, len(MONTHS) + 3):
+        c = formula(ws, r, col,
+            f"=IF({get_column_letter(col)}{rev_row}=0,0,"
+            f"{get_column_letter(col)}{gm_row}/{get_column_letter(col)}{rev_row})")
+        pct_fmt(c)
+    r += 1
+
+# ──────────────────────────────────────────────
+# MAIN
+# ──────────────────────────────────────────────
+
+def main():
+    wb = Workbook()
+    wb.remove(wb.active)   # remove default blank sheet
+
+    build_instructions(wb)
+    build_assumptions(wb)
+    build_headcount(wb)
+    build_salary(wb)
+    build_revenue(wb)
+    build_pnl(wb)
+
+    wb.save(OUTPUT_FILE)
+    print(f"✅  Created: {OUTPUT_FILE}")
+    print("    Sheets: Instructions | Assumptions | Headcount Plan | Salary & Cost | Revenue Forecast | P&L Summary")
+
+if __name__ == "__main__":
+    main()
