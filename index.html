@@ -1,0 +1,99 @@
+# 📞 Call Center Budget & Forecast Tool
+
+A professional Excel budget template for call centers — with a Python script to regenerate or customize it.
+
+## 📁 Files
+| File | Purpose |
+|------|---------|
+| `CC_Budget_Template.xlsx` | Ready-to-use Excel template — open and fill in blue cells |
+| `generate_budget.py` | Python script to regenerate the template (useful if you want to customize) |
+
+---
+
+## 🚀 Quick Start (no coding needed)
+1. Download `CC_Budget_Template.xlsx`
+2. Open in Excel or Google Sheets
+3. Start on the **📖 Instructions** tab
+4. Fill in only the **blue cells** — everything else calculates automatically
+
+---
+
+## 📊 Sheets Overview
+
+| Sheet | What to do |
+|-------|-----------|
+| **📖 Instructions** | Read first |
+| **Assumptions** | Enter unit rates, shrinkage %, salaries, meal cards, CTC multipliers |
+| **Headcount Plan** | Enter FTE count per role per month |
+| **Salary & Cost** | Auto-calculated salary + CTC cost |
+| **Revenue Forecast** | Auto-calculated billable revenue |
+| **P&L Summary** | Full P&L with margin — add overhead costs here |
+
+---
+
+## 🔧 Customizing with Python (optional)
+
+### Install requirements (once)
+```bash
+pip install openpyxl
+```
+
+### Run
+```bash
+python generate_budget.py
+```
+
+This regenerates `CC_Budget_Template.xlsx` with your changes.
+
+### Common customizations (edit at top of `generate_budget.py`)
+
+**Add a new language/LOB:**
+```python
+UNIT_RATE_ROWS = [
+    ...
+    ("Spanish – Voice Inbound", "Per Hour"),   # ← add here
+]
+```
+
+**Add a new agent type:**
+```python
+BILLABLE_AGENTS = [
+    ...
+    ("Agent – Junior", "Spanish – Voice Inbound", 7.5),  # ← add here
+]
+```
+
+**Add an overhead role:**
+```python
+OVERHEAD_ROLES = [
+    ...
+    "Compliance Officer",   # ← add here
+]
+```
+
+**Change shrinkage defaults:**
+```python
+SHRINKAGE = [
+    ("Annual Leave / Vacation", 0.10),   # ← change the percentage
+    ...
+]
+```
+
+---
+
+## 📐 Color Coding
+| Color | Meaning |
+|-------|---------|
+| 🔵 Blue text | **Input cell** — fill this in |
+| ⚫ Black text | Auto-calculated formula — do not edit |
+| 🟢 Green text | Linked from another sheet — do not edit |
+| 🟡 Gold background | Key assumption needing regular review |
+
+---
+
+## 💡 Tips
+- **Shrinkage** is fully adjustable — edit each component separately in the Assumptions sheet
+- **Overhead roles** (Team Leaders, QA, WFM, etc.) are tracked separately from billable agents
+- **CTC multiplier** automatically adds employer social costs on top of gross salary
+- **Meal card** is calculated as daily rate × working days per month
+- To forecast: change headcount numbers in future months — revenue and costs update instantly
